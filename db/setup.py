@@ -82,6 +82,63 @@ def create_schema():
     CREATE INDEX IF NOT EXISTS idx_bets_result ON bets(result);
     CREATE INDEX IF NOT EXISTS idx_bets_placed_at ON bets(placed_at);
     CREATE INDEX IF NOT EXISTS idx_snapshots_date ON bankroll_snapshots(snapshot_date);
+
+    CREATE TABLE IF NOT EXISTS ai_analysis (
+        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        event           TEXT NOT NULL,
+        sport           TEXT,
+        market          TEXT,
+        pick            TEXT,
+        conviction      TEXT,
+        grade           TEXT,
+        action          TEXT,
+        edge_pct        REAL DEFAULT 0,
+        ev_pct          REAL DEFAULT 0,
+        one_line_thesis TEXT,
+        full_reasoning  TEXT,
+        risk_factors    TEXT,
+        model_version   TEXT DEFAULT 'gpt-4o',
+        created_at      TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS agent_decisions (
+        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        agent_name      TEXT NOT NULL,
+        decision_type   TEXT NOT NULL,
+        input_json      TEXT,
+        output_json     TEXT,
+        confidence      REAL DEFAULT 0,
+        latency_ms      INTEGER DEFAULT 0,
+        created_at      TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS steam_alerts (
+        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        event           TEXT NOT NULL,
+        sport           TEXT,
+        market          TEXT,
+        alert_type      TEXT,
+        conviction      TEXT,
+        move_direction  TEXT,
+        move_amount     REAL,
+        public_pct      REAL,
+        book            TEXT,
+        alert_json      TEXT,
+        detected_at     TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS daily_briefings (
+        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        date            TEXT UNIQUE,
+        briefing_json   TEXT,
+        created_at      TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_ai_analysis_event ON ai_analysis(event);
+    CREATE INDEX IF NOT EXISTS idx_ai_analysis_grade ON ai_analysis(grade);
+    CREATE INDEX IF NOT EXISTS idx_steam_event ON steam_alerts(event);
+    CREATE INDEX IF NOT EXISTS idx_steam_conviction ON steam_alerts(conviction);
+    CREATE INDEX IF NOT EXISTS idx_agent_decisions_name ON agent_decisions(agent_name);
     """)
 
     conn.commit()

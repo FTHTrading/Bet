@@ -9,6 +9,7 @@ import {
   AlertTriangle, CheckCircle, Activity, BarChart2,
   ArrowUpRight, ArrowDownRight, Clock, Loader2,
   TrendingDown, Globe, Award, GitMerge,
+  Brain, MessageSquare, Flame, ShieldAlert, Send,
 } from 'lucide-react';
 import clsx from 'clsx';
 
@@ -1098,15 +1099,389 @@ function QuickActions() {
   );
 }
 
+// ─── AI Intelligence Components ───────────────────────────────────────────────
+
+function ConvictionBadge({ grade }: { grade: string }) {
+  const g = (grade ?? '').toUpperCase();
+  if (g === 'A+') return <span className="badge text-[10px] font-black" style={{ background: 'rgba(0,232,122,0.18)', color: '#00e87a', border: '1px solid rgba(0,232,122,0.35)' }}>A+</span>;
+  if (g === 'A')  return <span className="badge text-[10px] font-black" style={{ background: 'rgba(0,232,122,0.12)', color: '#00e87a', border: '1px solid rgba(0,232,122,0.25)' }}>A</span>;
+  if (g === 'B')  return <span className="badge text-[10px] font-black" style={{ background: 'rgba(59,130,246,0.15)', color: '#60a5fa', border: '1px solid rgba(59,130,246,0.35)' }}>B</span>;
+  if (g === 'C')  return <span className="badge text-[10px] font-black" style={{ background: 'rgba(245,158,11,0.15)', color: '#fbbf24', border: '1px solid rgba(245,158,11,0.3)' }}>C</span>;
+  return <span className="badge text-[10px] font-black" style={{ background: 'rgba(239,68,68,0.12)', color: '#f87171', border: '1px solid rgba(239,68,68,0.25)' }}>{g || 'D'}</span>;
+}
+
+function ActionBadge({ action }: { action: string }) {
+  const a = (action ?? '').toUpperCase();
+  const styles: Record<string, React.CSSProperties> = {
+    BET_NOW:  { background: 'rgba(0,232,122,0.18)', color: '#00e87a', border: '1px solid rgba(0,232,122,0.45)' },
+    LEAN_YES: { background: 'rgba(59,130,246,0.15)', color: '#60a5fa', border: '1px solid rgba(59,130,246,0.35)' },
+    WAIT:     { background: 'rgba(245,158,11,0.12)', color: '#fbbf24', border: '1px solid rgba(245,158,11,0.3)' },
+    FADE:     { background: 'rgba(239,68,68,0.12)', color: '#f87171', border: '1px solid rgba(239,68,68,0.3)' },
+    SKIP:     { background: 'rgba(255,255,255,0.05)', color: '#4a6580', border: '1px solid rgba(255,255,255,0.08)' },
+  };
+  return <span className="badge text-[10px] font-bold" style={styles[a] ?? styles.SKIP}>{a}</span>;
+}
+
+// ─── AI Chat ─────────────────────────────────────────────────────────────────
+
+interface ChatMessage { role: 'user' | 'assistant'; content: string; ts: number; }
+
+function AIChat() {
+  const [messages, setMessages]   = useState<ChatMessage[]>([]);
+  const [input,    setInput]      = useState('');
+  const [loading,  setLoading]    = useState(false);
+  const [wsStatus, setWsStatus]   = useState<'idle' | 'connecting' | 'streaming'>('idle');
+  const wsRef     = React.useRef<WebSocket | null>(null);
+  const bottomRef = React.useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages]);
+
+  const sendMessage = async () => {
+    const text = input.trim();
+    if (!text || loading) return;
+    setInput('');
+    setLoading(true);
+
+    const userMsg: ChatMessage = { role: 'user', content: text, ts: Date.now() };
+    setMessages(prev => [...prev, userMsg]);
+
+    // Try streaming WebSocket first
+    const wsUrl = (API.replace(/^http/, 'ws')) + '/ws/ai';
+
+    try {
+      const ws = new WebSocket(wsUrl);
+      wsRef.current = ws;
+      let aiText = '';
+
+      ws.onopen = () => {
+        setWsStatus('connecting');
+        ws.send(JSON.stringify({ message: text, stream: true }));
+        setWsStatus('streaming');
+        setMessages(prev => [...prev, { role: 'assistant', content: '▌', ts: Date.now() }]);
+      };
+
+      ws.onmessage = (e) => {
+        const d = JSON.parse(e.data ?? '{}');
+        if (d.chunk) {
+          aiText += d.chunk;
+          setMessages(prev => {
+            const next = [...prev];
+            next[next.length - 1] = { role: 'assistant', content: aiText + '▌', ts: Date.now() };
+            return next;
+          });
+        }
+        if (d.done) {
+          setMessages(prev => {
+            const next = [...prev];
+            next[next.length - 1] = { role: 'assistant', content: aiText, ts: Date.now() };
+            return next;
+          });
+          ws.close();
+          setLoading(false);
+          setWsStatus('idle');
+        }
+      };
+
+      ws.onerror = async () => {
+        ws.close();
+        await fallbackChat(text);
+      };
+
+      ws.onclose = () => {
+        setLoading(false);
+        setWsStatus('idle');
+      };
+    } catch {
+      await fallbackChat(text);
+    }
+  };
+
+  const fallbackChat = async (text: string) => {
+    try {
+      const res = await fetch(`${API}/ai/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: text }),
+      });
+      const d = await res.json();
+      setMessages(prev => [...prev, { role: 'assistant', content: d.response ?? d.message ?? '(no response)', ts: Date.now() }]);
+    } catch {
+      setMessages(prev => [...prev, { role: 'assistant', content: 'AI Brain is offline. Check the MCP server.', ts: Date.now() }]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleKey = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
+  };
+
+  return (
+    <div className="card flex flex-col gap-3" style={{ height: 520 }}>
+      <SectionTitle icon={Brain} iconCls="bg-violet-500/10 text-violet-400" title="KALISHI AI Brain">
+        <div className="ml-auto flex items-center gap-1.5">
+          {wsStatus === 'streaming'
+            ? <><span className="w-1.5 h-1.5 rounded-full bg-violet-400 live-dot" /><span className="text-[9px] font-bold text-violet-400 tracking-widest uppercase">Streaming</span></>
+            : <><span className="w-1.5 h-1.5 rounded-full bg-ink-600" /><span className="text-[9px] font-bold text-ink-500 tracking-widest uppercase">GPT-4o</span></>
+          }
+        </div>
+      </SectionTitle>
+
+      {/* Messages */}
+      <div className="flex-1 overflow-y-auto space-y-3 pr-1" style={{ minHeight: 0 }}>
+        {messages.length === 0 && (
+          <div className="text-center py-10">
+            <Brain className="w-10 h-10 mx-auto text-violet-400/30 mb-3" />
+            <p className="text-ink-500 text-sm">Ask KALISHI about any bet, edge, or market.</p>
+            <p className="text-ink-700 text-xs mt-1">Try: "What's the sharpest play today?" or "Explain steam on Lakers -6"</p>
+          </div>
+        )}
+        {messages.map((m, i) => (
+          <div key={i} className={clsx('flex gap-2', m.role === 'user' ? 'justify-end' : 'justify-start')}>
+            <div
+              className="max-w-[85%] rounded-2xl px-3.5 py-2.5 text-sm leading-relaxed"
+              style={m.role === 'user'
+                ? { background: 'rgba(0,232,122,0.12)', border: '1px solid rgba(0,232,122,0.2)', color: '#c8f5e1' }
+                : { background: 'rgba(139,92,246,0.1)', border: '1px solid rgba(139,92,246,0.2)', color: '#e2dff7' }
+              }
+            >
+              <pre className="whitespace-pre-wrap font-sans text-sm">{m.content}</pre>
+            </div>
+          </div>
+        ))}
+        <div ref={bottomRef} />
+      </div>
+
+      {/* Input */}
+      <div className="flex gap-2 items-end">
+        <textarea
+          value={input}
+          onChange={e => setInput(e.target.value)}
+          onKeyDown={handleKey}
+          placeholder="Ask the AI Brain anything…"
+          rows={2}
+          className="flex-1 input-field text-sm resize-none"
+          style={{ minHeight: 48 }}
+        />
+        <button
+          onClick={sendMessage}
+          disabled={loading || !input.trim()}
+          className="btn-primary px-4 py-2.5 flex items-center gap-1.5 shrink-0"
+        >
+          {loading
+            ? <Loader2 className="w-4 h-4 animate-spin" />
+            : <Send className="w-4 h-4" />
+          }
+          <span className="text-sm">Send</span>
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ─── Steam / Sharp Alerts Panel ───────────────────────────────────────────────
+
+interface SteamAlert {
+  event: string; sport: string; market: string; alert_type: string;
+  conviction: string; move_direction?: string; move_amount?: number;
+  public_pct?: number; book?: string; detected_at?: string;
+}
+
+function SteamAlertsPanel() {
+  const { data, loading, refetch } = useApi<{ alerts: SteamAlert[]; total: number }>(
+    '/intelligence/steam', { alerts: [], total: 0 }, 30000
+  );
+  const alerts = data.alerts ?? [];
+  const criticals = alerts.filter(a => a.conviction === 'CRITICAL').length;
+
+  return (
+    <div className="card">
+      <SectionTitle icon={Flame} iconCls="bg-orange-500/10 text-orange-400" title="Steam Detector">
+        <div className="ml-auto flex items-center gap-2">
+          {criticals > 0 && (
+            <span className="text-[10px] font-bold text-orange-400 bg-orange-400/10 px-2 py-0.5 rounded-full">
+              {criticals} CRITICAL
+            </span>
+          )}
+          <button onClick={refetch} className="text-ink-600 hover:text-ink-300 transition-colors">
+            <RefreshCw className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      </SectionTitle>
+      {loading && <div className="space-y-2"><div className="skeleton rounded h-10" /><div className="skeleton rounded h-10" /></div>}
+      {!loading && alerts.length === 0 && (
+        <div className="text-center py-6 text-ink-600 text-xs">No steam detected — markets calm</div>
+      )}
+      <div className="space-y-1.5">
+        {alerts.slice(0, 8).map((a, i) => {
+          const color = a.conviction === 'CRITICAL' ? 'rgba(249,115,22,0.55)' : a.conviction === 'HIGH' ? 'rgba(239,68,68,0.45)' : 'rgba(245,158,11,0.35)';
+          const bg    = a.conviction === 'CRITICAL' ? 'rgba(249,115,22,0.07)' : 'rgba(255,255,255,0.03)';
+          return (
+            <div key={i} className="rounded-xl px-2.5 py-2 text-xs" style={{ background: bg, border: `1px solid ${color}` }}>
+              <div className="flex items-center gap-1.5">
+                <span className="text-[9px] font-black" style={{ color }}>{a.conviction}</span>
+                <span className="text-ink-200 font-medium truncate max-w-[180px]">{a.event}</span>
+                <span className="ml-auto text-ink-500">{a.alert_type?.replace('_', ' ')}</span>
+              </div>
+              <div className="text-ink-500 text-[10px] mt-0.5">
+                {a.market} {a.book ? `· ${a.book}` : ''} {a.move_amount ? `· Δ${a.move_amount > 0 ? '+' : ''}${a.move_amount.toFixed(1)}` : ''}
+                {a.public_pct ? ` · ${a.public_pct.toFixed(0)}% public` : ''}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ─── AI Consensus Panel ────────────────────────────────────────────────────────
+
+interface ConsensusItem {
+  event: string; sport: string; market: string; outcome: string;
+  grade: string; action: string; confidence: string;
+  edge_pct: number; ev_pct: number; notes: string[];
+}
+
+function ConsensusPanel() {
+  const [picks, setPicks] = useState<ConsensusItem[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const load = async () => {
+      try {
+        // get today's picks, then run consensus on them
+        const res = await fetch(`${API}/picks?limit=10`);
+        const d   = await res.json();
+        const todayPicks = (d.picks ?? d ?? []) as Array<{
+          sport: string; event: string; market: string; pick: string;
+          our_prob: number; decimal_odds: number; verdict: string;
+        }>;
+        if (!todayPicks.length) { setLoading(false); return; }
+
+        const cr = await fetch(`${API}/ai/consensus`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ picks: todayPicks.map(p => ({
+            event: p.event, sport: p.sport, market: p.market, outcome: p.pick,
+            model_prob: p.our_prob, market_odds: p.decimal_odds,
+          })) }),
+        });
+        const cd = await cr.json();
+        setPicks(cd.results ?? []);
+      } catch { /* offline */ }
+      finally { setLoading(false); }
+    };
+    load();
+  }, []);
+
+  return (
+    <div className="card">
+      <SectionTitle icon={ShieldAlert} iconCls="bg-blue-500/10 text-blue-400" title="Market Consensus">
+        <span className="ml-auto text-[10px] text-ink-600">{picks.length} graded</span>
+      </SectionTitle>
+      {loading && <Spinner />}
+      {!loading && picks.length === 0 && <EmptyState msg="No picks graded yet — plays load throughout the day" />}
+      <div className="space-y-1.5">
+        {picks.slice(0, 8).map((p, i) => (
+          <div key={i} className="flex items-center gap-2 px-2.5 py-2 rounded-xl text-xs"
+            style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.06)' }}>
+            <ConvictionBadge grade={p.grade} />
+            <div className="flex-1 min-w-0">
+              <div className="text-ink-100 font-medium truncate">{p.event}</div>
+              <div className="text-ink-500 text-[10px]">{p.outcome} · {p.market}</div>
+            </div>
+            <ActionBadge action={p.action} />
+            <div className="text-right shrink-0 font-mono text-[10px]">
+              <div className={p.edge_pct >= 3 ? 'text-edge-green' : 'text-ink-400'}>+{p.edge_pct?.toFixed(1)}%</div>
+              <div className="text-ink-600">{p.confidence}</div>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ─── AI Brief ─────────────────────────────────────────────────────────────────
+
+function DailyBriefPanel() {
+  const { data, loading } = useApi<{
+    ai_summary: string; key_angles: string[]; profit_machine: Array<{ pick: string; edge_pct: number }>;
+    sharp_alerts: number; total_picks: number; risk_flags: string[];
+  }>('/ai/briefing', {
+    ai_summary: '', key_angles: [], profit_machine: [], sharp_alerts: 0, total_picks: 0, risk_flags: []
+  }, 300000);
+
+  return (
+    <div className="card">
+      <SectionTitle icon={MessageSquare} iconCls="bg-edge-gold/10 text-edge-gold" title="Daily AI Brief">
+        <span className="ml-auto text-[10px] text-ink-600">{data.total_picks} plays · {data.sharp_alerts} steam</span>
+      </SectionTitle>
+      {loading && <div className="space-y-2"><div className="skeleton rounded h-4 w-full" /><div className="skeleton rounded h-4 w-4/5" /></div>}
+      {!loading && data.ai_summary && (
+        <p className="text-ink-300 text-xs leading-relaxed mb-3">{data.ai_summary}</p>
+      )}
+      {!loading && data.key_angles?.length > 0 && (
+        <div className="mb-2">
+          <div className="text-[10px] font-bold text-ink-600 uppercase tracking-wider mb-1">Key Angles</div>
+          <ul className="space-y-0.5">
+            {data.key_angles.slice(0, 4).map((a, i) => (
+              <li key={i} className="flex items-start gap-1.5 text-xs text-ink-300">
+                <CheckCircle className="w-3 h-3 text-edge-green shrink-0 mt-0.5" />
+                {a}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {!loading && data.risk_flags?.length > 0 && (
+        <div>
+          <div className="text-[10px] font-bold text-ink-600 uppercase tracking-wider mb-1">Risk Flags</div>
+          <ul className="space-y-0.5">
+            {data.risk_flags.slice(0, 3).map((f, i) => (
+              <li key={i} className="flex items-start gap-1.5 text-xs text-edge-red/80">
+                <AlertTriangle className="w-3 h-3 shrink-0 mt-0.5" />
+                {f}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {!loading && !data.ai_summary && (
+        <div className="text-ink-600 text-xs text-center py-4">Brief generates at midnight or on demand via /ai/briefing</div>
+      )}
+    </div>
+  );
+}
+
+// ─── AI Tab Container ─────────────────────────────────────────────────────────
+
+function AIIntelligenceTab() {
+  return (
+    <div className="space-y-4">
+      <AIChat />
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <SteamAlertsPanel />
+        <ConsensusPanel />
+      </div>
+      <DailyBriefPanel />
+    </div>
+  );
+}
+
 // ─── Dashboard ────────────────────────────────────────────────────────────────
 
-type Tab = 'picks' | 'arb' | 'lineshop' | 'performance' | 'betlog';
+type Tab = 'picks' | 'arb' | 'lineshop' | 'performance' | 'betlog' | 'ai';
 const TABS: [Tab, string][] = [
   ['picks',       "Today's Picks"],
   ['arb',         'Arb + Middles'],
   ['lineshop',    'Line Shop'],
   ['performance', 'Performance Lab'],
   ['betlog',      'Bet Log'],
+  ['ai',          'AI Intelligence'],
 ];
 
 export default function Dashboard() {
@@ -1178,6 +1553,7 @@ export default function Dashboard() {
             {tab === 'lineshop'    && <LineShop />}
             {tab === 'performance' && <PerformanceLab />}
             {tab === 'betlog'      && <BetLog />}
+            {tab === 'ai'          && <AIIntelligenceTab />}
           </div>
           <div className="space-y-4">
             <SharpMovesFeed />

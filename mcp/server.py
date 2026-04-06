@@ -30,6 +30,44 @@ from engine.monte_carlo import mlb_game_sim, nba_game_sim, nfl_game_sim, nhl_gam
 from engine.mlb_metrics import analyze_mlb_matchup, fip, woba, era
 from engine.bankroll import BankrollManager
 
+# ── AI / RAG / Intelligence (lazy-loaded so server starts without optional deps) ──
+def _get_brain():
+    try:
+        from agents.brain import get_brain
+        return get_brain()
+    except Exception:
+        return None
+
+def _get_steam():
+    try:
+        from intelligence.steam_detector import get_steam_detector
+        return get_steam_detector()
+    except Exception:
+        return None
+
+def _get_consensus():
+    try:
+        from intelligence.consensus import MarketConsensus
+        return MarketConsensus()
+    except Exception:
+        return None
+
+def _get_rag():
+    try:
+        from rag.knowledge_base import KnowledgeBase
+        kb = KnowledgeBase()
+        kb.seed_static_knowledge()
+        return kb
+    except Exception:
+        return None
+
+def _get_retriever():
+    try:
+        from rag.retriever import KalishiRetriever
+        return KalishiRetriever()
+    except Exception:
+        return None
+
 # ── App ───────────────────────────────────────────────────────────────────
 app = FastAPI(
     title="KALISHI EDGE — Personal Sports Betting AI",
@@ -47,8 +85,34 @@ app.add_middleware(
 BANKROLL = float(os.getenv("BANKROLL_TOTAL", "10000"))
 bankroll_mgr = BankrollManager(BANKROLL)
 
+# ── Startup: seed RAG knowledge base ─────────────────────────────────────
+@app.on_event("startup")
+async def startup_event():
+    try:
+        from rag.knowledge_base import KnowledgeBase
+        kb = KnowledgeBase()
+        await asyncio.to_thread(kb.seed_static_knowledge)
+        await asyncio.to_thread(kb.ingest_bets_from_db)
+        print("[KALISHI] RAG knowledge base seeded")
+    except Exception as e:
+        print(f"[KALISHI] RAG startup skipped: {e}")
+
 # WebSocket connections for live dashboard updates
 _ws_clients: list[WebSocket] = []
+_ai_ws_clients: list[WebSocket] = []
+
+async def broadcast_ai(data: dict):
+    """Broadcast AI agent events to AI WebSocket clients."""
+    msg = json.dumps(data)
+    disconnected = []
+    for ws in _ai_ws_clients:
+        try:
+            await ws.send_text(msg)
+        except Exception:
+            disconnected.append(ws)
+    for ws in disconnected:
+        if ws in _ai_ws_clients:
+            _ai_ws_clients.remove(ws)
 
 async def broadcast(data: dict):
     """Broadcast update to all dashboard WebSocket clients."""
@@ -149,6 +213,48 @@ class ActsOfGodRequest(BaseModel):
 class ProfitMachineRequest(BaseModel):
     bankroll: Optional[float] = None
     confidence: str = "standard"
+
+class ChatRequest(BaseModel):
+    message: str = Field(..., min_length=1, max_length=2000)
+    clear_history: bool = False
+
+class PickAnalysisRequest(BaseModel):
+    sport: str
+    event: str
+    market: str
+    edge_pct: float
+    ev_pct: float
+    our_prob: float
+    implied_prob: float
+    american_odds: int
+    stake: float
+    additional_context: Optional[dict] = None
+
+class ConsensusRequest(BaseModel):
+    event:         str
+    sport:         str
+    market:        str
+    outcome:       str
+    model_prob:    float
+    market_odds:   float
+    sharp_odds:    Optional[float] = None
+    steam_alert:   bool = False
+    rlm_signal:    bool = False
+    injury_impact: float = 0.0
+
+class LineFeedRequest(BaseModel):
+    event:   str
+    sport:   str
+    market:  str
+    book:    str
+    outcome: str
+    odds:    float
+    public_home_pct: Optional[float] = None
+
+class RAGSearchRequest(BaseModel):
+    query:             str
+    collections:       Optional[List[str]] = None
+    n_per_collection:  int = Field(3, ge=1, le=10)
 
 
 # ── Endpoints ──────────────────────────────────────────────────────────────
@@ -772,29 +878,249 @@ async def middles_endpoint():
     return {"middles": middles, "count": len(middles)}
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# ── AI BRAIN ENDPOINTS ─────────────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════════════
+
+@app.post("/ai/chat")
+async def ai_chat(req: ChatRequest):
+    """
+    Conversational AI interface with RAG augmentation.
+    GPT-4o powered. Context-aware with conversation memory.
+    """
+    brain = _get_brain()
+    if not brain:
+        return {"response": "AI Brain not available — install openai package and set OPENAI_API_KEY", "available": False}
+    if req.clear_history:
+        brain.clear_history()
+    response = await brain.chat(req.message)
+    await broadcast_ai({"type": "ai_chat", "query": req.message[:80], "ts": datetime.now().isoformat()})
+    return {"response": response, "available": brain.available, "model": "gpt-4o"}
+
+
+@app.websocket("/ws/ai")
+async def websocket_ai(ws: WebSocket):
+    """
+    Streaming AI WebSocket — token-by-token response streaming.
+    Send: {"message": "your question"}
+    Receive: {"type": "token", "delta": "..."} + {"type": "done"}
+    """
+    await ws.accept()
+    _ai_ws_clients.append(ws)
+    try:
+        await ws.send_text(json.dumps({"type": "ready", "model": "gpt-4o", "rag": True}))
+        while True:
+            raw = await ws.receive_text()
+            try:
+                data = json.loads(raw)
+            except Exception:
+                continue
+            msg = data.get("message", "").strip()
+            if not msg:
+                continue
+            brain = _get_brain()
+            if not brain:
+                await ws.send_text(json.dumps({"type": "error", "message": "AI Brain unavailable"}))
+                continue
+            await ws.send_text(json.dumps({"type": "thinking"}))
+            full = []
+            async for token in brain.stream_chat(msg):
+                full.append(token)
+                await ws.send_text(json.dumps({"type": "token", "delta": token}))
+            await ws.send_text(json.dumps({"type": "done", "full_response": "".join(full)}))
+    except WebSocketDisconnect:
+        if ws in _ai_ws_clients:
+            _ai_ws_clients.remove(ws)
+
+
+@app.post("/ai/analyze-pick")
+async def ai_analyze_pick(req: PickAnalysisRequest):
+    """
+    Full AI-powered pick analysis.
+    Returns structured: conviction, reasoning, key edge, risks, action.
+    """
+    brain = _get_brain()
+    if not brain:
+        return {"error": "AI Brain unavailable", "conviction": "HOLD", "action": "MONITOR"}
+    analysis = await brain.analyze_pick(
+        sport=req.sport, event=req.event, market=req.market,
+        edge_pct=req.edge_pct, ev_pct=req.ev_pct,
+        our_prob=req.our_prob, implied_prob=req.implied_prob,
+        american_odds=req.american_odds, stake=req.stake,
+        additional_context=req.additional_context,
+    )
+    return {"analysis": analysis, "model": "gpt-4o"}
+
+
+@app.get("/ai/briefing")
+async def ai_daily_briefing():
+    """Generate today's full AI-powered betting briefing."""
+    brain = _get_brain()
+    if not brain:
+        return {"briefing": "AI Brain unavailable", "ts": datetime.now().isoformat()}
+    from agents.orchestrator import run_daily_picks
+    picks_data = await run_daily_picks()
+    picks    = picks_data.get("picks", [])
+    bankroll = bankroll_mgr.snapshot()
+    market_summary = {
+        "bankroll": round(bankroll.current, 2),
+        "roi_pct":  round(bankroll.roi * 100, 2),
+        "win_rate": round(bankroll.win_rate * 100, 2),
+        "open_bets": bankroll.bets_placed,
+    }
+    briefing = await brain.generate_daily_briefing(picks, market_summary)
+    return {"briefing": briefing, "ts": datetime.now().isoformat()}
+
+
+@app.get("/ai/status")
+def ai_status():
+    """Check status of all AI subsystems."""
+    brain = _get_brain()
+    steam = _get_steam()
+    rag_stats: dict = {}
+    try:
+        from rag.embeddings import get_store
+        rag_stats = get_store().stats()
+    except Exception:
+        pass
+    return {
+        "brain":       {"available": brain.available if brain else False, "model": "gpt-4o"},
+        "rag":         rag_stats,
+        "steam":       steam.stats() if steam else {"available": False},
+        "ts":          datetime.now().isoformat(),
+    }
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# ── INTELLIGENCE ENDPOINTS ──────────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════════════
+
+@app.get("/intelligence/steam")
+def get_steam_alerts(limit: int = 30, sharp_only: bool = False, sport: Optional[str] = None):
+    """Real-time sharp money / steam move alerts."""
+    detector = _get_steam()
+    if not detector:
+        return {"moves": _get_mock_steam_alerts(), "source": "mock"}
+    alerts = detector.get_sharp_alerts(limit) if sharp_only else detector.get_alerts(limit, sport)
+    if not alerts:
+        alerts = _get_mock_steam_alerts()
+    return {"moves": alerts, "count": len(alerts), "stats": detector.stats()}
+
+
+@app.post("/intelligence/feed")
+async def feed_line(req: LineFeedRequest):
+    """Ingest a line observation into the steam detector."""
+    detector = _get_steam()
+    if not detector:
+        return {"ok": False, "error": "Steam detector unavailable"}
+    alert = detector.feed(
+        event=req.event, sport=req.sport, market=req.market,
+        book=req.book, outcome=req.outcome, odds=req.odds,
+        public_home_pct=req.public_home_pct,
+    )
+    if alert:
+        await broadcast({"type": "steam_alert", **alert.to_dict()})
+        await broadcast_ai({"type": "steam_alert", "event": req.event})
+        return {"ok": True, "alert": alert.to_dict()}
+    return {"ok": True, "alert": None}
+
+
+@app.post("/ai/consensus")
+def ai_consensus(req: ConsensusRequest):
+    """Full multi-signal consensus analysis for a single opportunity."""
+    consensus = _get_consensus()
+    if not consensus:
+        return {"error": "Consensus engine unavailable"}
+    result = consensus.analyze(
+        event=req.event, sport=req.sport, market=req.market, outcome=req.outcome,
+        model_prob=req.model_prob, market_odds=req.market_odds, sharp_odds=req.sharp_odds,
+        steam_alert=req.steam_alert, rlm_signal=req.rlm_signal, injury_impact=req.injury_impact,
+    )
+    return result.to_dict()
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# ── RAG ENDPOINTS ───────────────────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════════════
+
+@app.post("/rag/search")
+def rag_search(req: RAGSearchRequest):
+    """Semantic search across the RAG knowledge base."""
+    retriever = _get_retriever()
+    if not retriever:
+        return {"results": {}, "error": "RAG unavailable — install chromadb and sentence-transformers"}
+    results = retriever._store.multi_query(req.query, req.collections, req.n_per_collection)
+    return {"query": req.query, "results": results}
+
+
+@app.get("/rag/stats")
+def rag_stats():
+    """RAG vector store collection statistics."""
+    try:
+        from rag.embeddings import get_store
+        return get_store().stats()
+    except Exception as e:
+        return {"ready": False, "error": str(e)}
+
+
+def _get_mock_steam_alerts() -> list:
+    """Demo steam alerts for when detector has no live data."""
+    return [
+        {"event": "Lakers @ Celtics",  "sport": "nba", "market": "Spread",    "from_odds": -108, "to_odds": -118, "delta": -10, "book": "DraftKings", "sharp": True,  "rlm": True,  "conviction": "HIGH",     "reason": "Line moved -10 in 3.2min | RLM: 68% public bets vs line move opposite", "age_mins": 8,  "detected_at": datetime.utcnow().isoformat()},
+        {"event": "Yankees @ Red Sox", "sport": "mlb", "market": "Moneyline", "from_odds": +105, "to_odds": +120, "delta": +15, "book": "FanDuel",    "sharp": True,  "rlm": False, "conviction": "CRITICAL",  "reason": "Line moved +15 in 1.8min | Steam confirmed 3 books",                  "age_mins": 14, "detected_at": datetime.utcnow().isoformat()},
+        {"event": "Chiefs @ Ravens",   "sport": "nfl", "market": "Spread",    "from_odds": -130, "to_odds": -145, "delta": -15, "book": "BetMGM",     "sharp": True,  "rlm": True,  "conviction": "CRITICAL",  "reason": "Steam: -15 in 4min | RLM: 74% public on Ravens vs sharp move",       "age_mins": 31, "detected_at": datetime.utcnow().isoformat()},
+        {"event": "Dodgers @ Giants",  "sport": "mlb", "market": "Total O/U", "from_odds": -110, "to_odds": -125, "delta": -15, "book": "Caesars",    "sharp": True,  "rlm": False, "conviction": "HIGH",     "reason": "Under steam | hit cold number 8.5",                                 "age_mins": 52, "detected_at": datetime.utcnow().isoformat()},
+        {"event": "Flyers @ Penguins", "sport": "nhl", "market": "Puck Line", "from_odds": +110, "to_odds": +125, "delta": +15, "book": "PointsBet",  "sharp": False, "rlm": False, "conviction": "MEDIUM",   "reason": "Moderate line drift",                                               "age_mins": 87, "detected_at": datetime.utcnow().isoformat()},
+    ]
+
+
 # ── MCP Tool Manifest ──────────────────────────────────────────────────────
 
 @app.get("/mcp/tools")
 def mcp_tools():
     """Return MCP tool manifest for AI agent discovery."""
     return {
+        "protocol": "MCP/1.0",
+        "agent": "KALISHI EDGE",
+        "version": "2.0.0",
+        "capabilities": ["quantitative", "ai_brain", "rag", "steam_intelligence", "streaming"],
         "tools": [
-            {"name": "kelly_criterion",       "endpoint": "/kelly",                  "method": "POST", "description": "Optimal bet sizing"},
-            {"name": "expected_value",         "endpoint": "/ev",                     "method": "POST", "description": "EV calculation"},
-            {"name": "arbitrage_finder",       "endpoint": "/arbitrage",              "method": "POST", "description": "Cross-book arb"},
-            {"name": "no_vig_probability",     "endpoint": "/no-vig",                 "method": "GET",  "description": "True market prob"},
-            {"name": "profit_machine",         "endpoint": "/profit-machine",         "method": "POST", "description": "PMP 2.0 allocation"},
-            {"name": "acts_of_god",            "endpoint": "/acts-of-god",            "method": "POST", "description": "Exogenous adjustments"},
-            {"name": "simulate_mlb",           "endpoint": "/simulate/mlb",           "method": "POST", "description": "MLB Monte Carlo"},
-            {"name": "simulate_nba",           "endpoint": "/simulate/nba",           "method": "POST", "description": "NBA Monte Carlo"},
-            {"name": "simulate_nfl",           "endpoint": "/simulate/nfl",           "method": "POST", "description": "NFL Monte Carlo"},
-            {"name": "get_bankroll",           "endpoint": "/bankroll",               "method": "GET",  "description": "Bankroll status"},
-            {"name": "place_bet",              "endpoint": "/bets",                   "method": "POST", "description": "Record a bet"},
-            {"name": "todays_picks",           "endpoint": "/picks/today",            "method": "GET",  "description": "AI-generated picks"},
-            {"name": "analytics_performance",  "endpoint": "/analytics/performance",  "method": "GET",  "description": "CLV + ROI + edge-bucket attribution"},
-            {"name": "line_shop",              "endpoint": "/lines/best",             "method": "GET",  "description": "Best available odds across all books"},
-            {"name": "sharp_moves",            "endpoint": "/lines/movement",         "method": "GET",  "description": "Recent sharp line movement feed"},
-            {"name": "middles_finder",         "endpoint": "/picks/middles",          "method": "GET",  "description": "Middle opportunities with win window"},
+            # ── Quantitative ──
+            {"name": "kelly_criterion",       "endpoint": "/kelly",                  "method": "POST", "category": "quant",         "description": "Optimal Kelly bet sizing"},
+            {"name": "expected_value",         "endpoint": "/ev",                     "method": "POST", "category": "quant",         "description": "Expected value calculation"},
+            {"name": "arbitrage_finder",       "endpoint": "/arbitrage",              "method": "POST", "category": "quant",         "description": "Cross-book arbitrage finder"},
+            {"name": "no_vig_probability",     "endpoint": "/no-vig",                 "method": "GET",  "category": "quant",         "description": "No-vig true market probability"},
+            {"name": "profit_machine",         "endpoint": "/profit-machine",         "method": "POST", "category": "quant",         "description": "Profit Machine Protocol 2.0"},
+            {"name": "acts_of_god",            "endpoint": "/acts-of-god",            "method": "POST", "category": "quant",         "description": "Exogenous factor adjustments"},
+            # ── Simulations ──
+            {"name": "simulate_mlb",           "endpoint": "/simulate/mlb",           "method": "POST", "category": "simulation",    "description": "MLB Monte Carlo (50k sims, sabermetrics)"},
+            {"name": "simulate_nba",           "endpoint": "/simulate/nba",           "method": "POST", "category": "simulation",    "description": "NBA Monte Carlo (pace, ratings, B2B)"},
+            {"name": "simulate_nfl",           "endpoint": "/simulate/nfl",           "method": "POST", "category": "simulation",    "description": "NFL Monte Carlo (DVOA, EPA, weather)"},
+            # ── Bankroll ──
+            {"name": "get_bankroll",           "endpoint": "/bankroll",               "method": "GET",  "category": "bankroll",      "description": "Live bankroll state + stats"},
+            {"name": "bankroll_history",       "endpoint": "/bankroll/history",       "method": "GET",  "category": "bankroll",      "description": "Daily equity curve"},
+            {"name": "place_bet",              "endpoint": "/bets",                   "method": "POST", "category": "bankroll",      "description": "Record a bet"},
+            # ── Picks ──
+            {"name": "todays_picks",           "endpoint": "/picks/today",            "method": "GET",  "category": "picks",         "description": "AI + model generated picks"},
+            {"name": "middles_finder",         "endpoint": "/picks/middles",          "method": "GET",  "category": "picks",         "description": "Middle window opportunities"},
+            # ── Analytics ──
+            {"name": "analytics_performance",  "endpoint": "/analytics/performance",  "method": "GET",  "category": "analytics",     "description": "CLV + ROI + edge-bucket attribution"},
+            # ── Line Shopping ──
+            {"name": "line_shop",              "endpoint": "/lines/best",             "method": "GET",  "category": "lines",         "description": "Best available odds across all books"},
+            {"name": "sharp_moves",            "endpoint": "/lines/movement",         "method": "GET",  "category": "lines",         "description": "Sharp line movement feed"},
+            # ── AI Brain ──
+            {"name": "ai_chat",                "endpoint": "/ai/chat",                "method": "POST", "category": "ai",            "description": "GPT-4o conversational analysis with RAG"},
+            {"name": "ai_chat_stream",         "endpoint": "/ws/ai",                  "method": "WS",   "category": "ai",            "description": "Streaming AI chat WebSocket"},
+            {"name": "ai_analyze_pick",        "endpoint": "/ai/analyze-pick",        "method": "POST", "category": "ai",            "description": "Structured AI pick analysis: conviction + reasoning"},
+            {"name": "ai_daily_briefing",      "endpoint": "/ai/briefing",            "method": "GET",  "category": "ai",            "description": "Full AI-powered daily briefing"},
+            {"name": "ai_consensus",           "endpoint": "/ai/consensus",           "method": "POST", "category": "ai",            "description": "Multi-signal consensus analysis"},
+            {"name": "ai_status",              "endpoint": "/ai/status",              "method": "GET",  "category": "ai",            "description": "AI subsystems health check"},
+            # ── Intelligence ──
+            {"name": "steam_alerts",           "endpoint": "/intelligence/steam",     "method": "GET",  "category": "intelligence",  "description": "Real-time steam + RLM alerts"},
+            {"name": "feed_line",              "endpoint": "/intelligence/feed",      "method": "POST", "category": "intelligence",  "description": "Feed live line for steam detection"},
+            # ── RAG ──
+            {"name": "rag_search",             "endpoint": "/rag/search",             "method": "POST", "category": "rag",           "description": "Semantic search over knowledge base"},
+            {"name": "rag_stats",              "endpoint": "/rag/stats",              "method": "GET",  "category": "rag",           "description": "Vector store collection stats"},
         ]
     }
 
