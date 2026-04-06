@@ -42,7 +42,7 @@ async def run_daily_picks() -> dict:
     
     # 2. Fetch schedules
     schedule_results = {}
-    for sport in ["nba", "mlb", "nfl", "nhl"]:
+    for sport in ["nba", "mlb", "nfl", "nhl", "ncaab"]:
         try:
             schedule_results[sport] = await get_schedule(sport)
         except Exception:
@@ -51,8 +51,21 @@ async def run_daily_picks() -> dict:
     # 3. Build picks
     picks = []
     arb_picks = []
+    college_picks = []
     
     for sport, games in all_odds.items():
+        # Route NCAAB games through the college tournament analyzer
+        if sport == "ncaab":
+            try:
+                from agents.ncaa_agent import generate_bracket_picks
+                ncaa_picks = generate_bracket_picks(games)
+                for p in ncaa_picks:
+                    p["recommended_stake"] = p.get("recommended_stake", BANKROLL * 0.015)
+                college_picks.extend(ncaa_picks)
+            except Exception as e:
+                print(f"[Orchestrator] NCAA picks error: {e}")
+            continue
+
         for game in games:
             h2h = game.get("best_lines", {}).get("h2h", {})
             spreads = game.get("best_lines", {}).get("spreads", {})
@@ -129,18 +142,22 @@ async def run_daily_picks() -> dict:
     # Sort picks by edge
     picks.sort(key=lambda x: x["edge_pct"], reverse=True)
     arb_picks.sort(key=lambda x: x["profit_pct"], reverse=True)
+    college_picks.sort(key=lambda x: x.get("edge_pct", 0), reverse=True)
     
     return {
         "generated_at": datetime.now().isoformat(),
         "bankroll": BANKROLL,
         "total_picks": len(picks),
         "total_arbs": len(arb_picks),
+        "total_college_picks": len(college_picks),
         "top_picks": picks[:20],
         "arbitrage_opportunities": arb_picks[:10],
+        "college_picks": college_picks[:15],
         "sports_covered": list(all_odds.keys()),
         "summary": {
             "value_bets": len([p for p in picks if "VALUE" in p["verdict"] or "STRONG" in p["verdict"]]),
             "arb_profit_available": sum(a["guaranteed_profit"] for a in arb_picks),
+            "college_value_bets": len([p for p in college_picks if p.get("edge_pct", 0) > 0]),
         }
     }
 

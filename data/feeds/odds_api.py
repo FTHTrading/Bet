@@ -149,8 +149,9 @@ async def get_all_sports_odds() -> dict[str, list[dict]]:
     """
     Pull odds for all active sports simultaneously.
     Returns dict keyed by sport name.
+    Covers pro leagues + college basketball (NCAAB March Madness / Finals).
     """
-    active_sports = ["nba", "mlb", "nfl", "nhl"]
+    active_sports = ["nba", "mlb", "nfl", "nhl", "ncaab"]
     
     tasks = {sport: get_odds(sport) for sport in active_sports}
     results = {}
@@ -163,6 +164,34 @@ async def get_all_sports_odds() -> dict[str, list[dict]]:
             print(f"[OddsAPI] Error fetching {sport}: {e}")
     
     return results
+
+
+async def get_player_props_odds(
+    sport: str,
+    event_id: str,
+    prop_markets: str = "player_points,player_rebounds,player_assists,player_threes,player_blocks,player_steals",
+) -> list[dict]:
+    """
+    Fetch player prop markets for a specific event.
+    prop_markets: comma-separated Odds API player prop market keys.
+    For NFL use: player_pass_yds,player_rush_yds,player_reception_yds,player_anytime_td
+    For MLB use: batter_hits,batter_total_bases,pitcher_strikeouts
+    For NHL use: player_shots_on_goal,player_goal,player_assists,player_points
+    """
+    sport_key = SPORTS.get(sport.lower(), sport)
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        resp = await client.get(
+            f"{BASE_URL}/sports/{sport_key}/events/{event_id}/odds",
+            params={
+                "apiKey": API_KEY,
+                "regions": "us",
+                "markets": prop_markets,
+                "oddsFormat": "decimal",
+                "bookmakers": ",".join(BOOKS[:4]),  # top 4 books for props
+            }
+        )
+        resp.raise_for_status()
+        return resp.json()
 
 
 async def scan_for_arb_opportunities(bankroll: float = 10_000) -> list[dict]:

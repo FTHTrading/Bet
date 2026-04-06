@@ -218,6 +218,100 @@ class ChatRequest(BaseModel):
     message: str = Field(..., min_length=1, max_length=2000)
     clear_history: bool = False
 
+# ── Player Props Request Models ────────────────────────────────────────────
+
+class NBAPropsRequest(BaseModel):
+    player_name: str
+    prop_type: str = "points"           # points, rebounds, assists, 3pm, pra, blocks, steals
+    line: float
+    american_odds_over: int = -110
+    american_odds_under: int = -110
+    season_avg: float
+    opp_def_rtg: float = 112.0
+    opp_pace: float = 100.0
+    usage_rate: float = 0.25
+    minutes_avg: float = 33.0
+    last_5_avg: Optional[float] = None
+    back_to_back: bool = False
+    home_game: bool = True
+    bankroll: Optional[float] = None
+
+class NFLPropsRequest(BaseModel):
+    player_name: str
+    prop_type: str = "passing_yards"    # passing_yards, rushing_yards, receiving_yards, pass_tds, rush_tds, receptions
+    line: float
+    american_odds_over: int = -115
+    american_odds_under: int = -115
+    season_avg: float
+    opp_pass_def_rank: int = 16
+    opp_rush_def_rank: int = 16
+    game_total: float = 44.5
+    pass_volume: float = 35.0
+    implied_team_score: float = 22.0
+    last_3_avg: Optional[float] = None
+    weather_wind_mph: float = 0.0
+    dome_game: bool = False
+    back_to_back_short_week: bool = False
+    bankroll: Optional[float] = None
+
+class MLBPropsRequest(BaseModel):
+    player_name: str
+    prop_type: str = "hits"             # hits, total_bases, strikeouts, rbis, runs, hrs
+    line: float
+    american_odds_over: int = -115
+    american_odds_under: int = -115
+    season_avg: float
+    opp_starter_fip: float = 4.00
+    opp_starter_k9: float = 8.5
+    batter_hand: str = "R"
+    pitcher_hand: str = "R"
+    batter_ba_vs_hand: Optional[float] = None
+    batter_slg_vs_hand: Optional[float] = None
+    park_factor: float = 1.00
+    temp_f: float = 72.0
+    wind_out: bool = False
+    wind_mph: float = 0.0
+    last_7_avg: Optional[float] = None
+    bankroll: Optional[float] = None
+
+class NHLPropsRequest(BaseModel):
+    player_name: str
+    prop_type: str = "shots"            # shots, goals, assists, points, saves
+    line: float
+    american_odds_over: int = -115
+    american_odds_under: int = -115
+    season_avg: float
+    opp_shots_allowed_pg: float = 30.0
+    opp_save_pct: float = 0.910
+    toi_avg: float = 18.0
+    pp_time: float = 2.0
+    line_mates_quality: float = 1.0
+    back_to_back: bool = False
+    last_5_avg: Optional[float] = None
+    bankroll: Optional[float] = None
+
+class NCAAMatchupRequest(BaseModel):
+    team_a: str
+    team_b: str
+    seed_a: int = Field(1, ge=1, le=16)
+    seed_b: int = Field(16, ge=1, le=16)
+    adj_em_a: float = 20.0              # KenPom Adjusted Efficiency Margin
+    adj_em_b: float = 10.0
+    adj_off_a: float = 110.0
+    adj_def_a: float = 95.0
+    adj_off_b: float = 105.0
+    adj_def_b: float = 100.0
+    momentum_a: float = 0.0             # net wins last 5 (+5 to -5)
+    momentum_b: float = 0.0
+    conf_games_played_a: int = 0        # conference tourney games played (fatigue)
+    conf_games_played_b: int = 0
+    american_odds_a: int = -200
+    american_odds_b: int = +170
+    round_name: str = "First Round"
+    conference_a: str = "SEC"
+    conference_b: str = "ACC"
+    bankroll: Optional[float] = None
+
 class PickAnalysisRequest(BaseModel):
     sport: str
     event: str
@@ -241,6 +335,38 @@ class ConsensusRequest(BaseModel):
     steam_alert:   bool = False
     rlm_signal:    bool = False
     injury_impact: float = 0.0
+
+class BetfairPlaceRequest(BaseModel):
+    """Manual single-bet placement on Betfair."""
+    sport:         str                      # nba | nfl | mlb | nhl
+    team:          str                      # team/player we are backing
+    opponent:      str
+    american_odds: int
+    edge_pct:      float
+    kelly_fraction: float = 0.02
+    stake:         Optional[float] = None   # override Kelly sizing
+    dry_run:       bool = True              # must be False to place real money
+
+class BetfairAutoRequest(BaseModel):
+    """Auto-execute all of today's value picks on Betfair."""
+    min_edge:  float = 0.04          # only execute picks above this edge
+    bankroll:  Optional[float] = None
+    dry_run:   bool = True           # must be False to place real money
+
+class KalshiPlaceRequest(BaseModel):
+    """Place a single order on Kalshi (US-legal, CFTC-regulated)."""
+    sport:          str                   # nba | nfl | mlb | nhl | ncaab
+    team:           str                   # team we are backing
+    our_prob:       float                 # our model's win probability (0-1 or 0-100)
+    edge_pct:       float                 # our edge vs market
+    kelly_fraction: float = 0.02
+    dry_run:        bool  = True          # must be False to place real order
+
+class KalshiAutoRequest(BaseModel):
+    """Auto-execute today's value picks on Kalshi."""
+    min_edge: float = 0.04
+    bankroll: Optional[float] = None
+    dry_run:  bool  = True               # must be False to place real orders
 
 class LineFeedRequest(BaseModel):
     event:   str
@@ -267,9 +393,11 @@ def root():
         "status": "operational",
         "tools": [
             "/kelly", "/ev", "/arbitrage", "/no-vig",
-            "/simulate/mlb", "/simulate/nba", "/simulate/nfl",
+            "/simulate/mlb", "/simulate/nba", "/simulate/nfl", "/simulate/ncaa",
             "/profit-machine", "/acts-of-god",
             "/bankroll", "/bets", "/picks/today",
+            "/picks/college", "/picks/props",
+            "/props/nba", "/props/nfl", "/props/mlb", "/props/nhl",
         ]
     }
 
@@ -1063,7 +1191,219 @@ def rag_stats():
         return {"ready": False, "error": str(e)}
 
 
-def _get_mock_steam_alerts() -> list:
+# ═══════════════════════════════════════════════════════════════════════════
+# ── PLAYER PROPS ENDPOINTS ─────────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════════════
+
+@app.post("/props/nba")
+def props_nba(req: NBAPropsRequest):
+    """
+    NBA player prop analysis.
+    prop_type: points, rebounds, assists, 3pm, pra, blocks, steals.
+    Returns projected stat, edge, EV, and Kelly-sized stake recommendation.
+    """
+    from agents.props_agent import analyze_nba_prop
+    bankroll = req.bankroll or BANKROLL
+    return analyze_nba_prop(
+        player_name=req.player_name, prop_type=req.prop_type,
+        line=req.line, american_odds_over=req.american_odds_over, american_odds_under=req.american_odds_under,
+        season_avg=req.season_avg, opp_def_rtg=req.opp_def_rtg, opp_pace=req.opp_pace,
+        usage_rate=req.usage_rate, minutes_avg=req.minutes_avg, last_5_avg=req.last_5_avg,
+        back_to_back=req.back_to_back, home_game=req.home_game, bankroll=bankroll,
+    )
+
+
+@app.post("/props/nfl")
+def props_nfl(req: NFLPropsRequest):
+    """
+    NFL player prop analysis.
+    prop_type: passing_yards, rushing_yards, receiving_yards, pass_tds, rush_tds, receptions.
+    """
+    from agents.props_agent import analyze_nfl_prop
+    bankroll = req.bankroll or BANKROLL
+    return analyze_nfl_prop(
+        player_name=req.player_name, prop_type=req.prop_type,
+        line=req.line, american_odds_over=req.american_odds_over, american_odds_under=req.american_odds_under,
+        season_avg=req.season_avg, opp_pass_def_rank=req.opp_pass_def_rank,
+        opp_rush_def_rank=req.opp_rush_def_rank, game_total=req.game_total,
+        pass_volume=req.pass_volume, implied_team_score=req.implied_team_score,
+        last_3_avg=req.last_3_avg, weather_wind_mph=req.weather_wind_mph,
+        dome_game=req.dome_game, back_to_back_short_week=req.back_to_back_short_week, bankroll=bankroll,
+    )
+
+
+@app.post("/props/mlb")
+def props_mlb(req: MLBPropsRequest):
+    """
+    MLB player prop analysis.
+    prop_type: hits, total_bases, strikeouts, rbis, runs, hrs.
+    """
+    from agents.props_agent import analyze_mlb_prop
+    bankroll = req.bankroll or BANKROLL
+    return analyze_mlb_prop(
+        player_name=req.player_name, prop_type=req.prop_type,
+        line=req.line, american_odds_over=req.american_odds_over, american_odds_under=req.american_odds_under,
+        season_avg=req.season_avg, opp_starter_fip=req.opp_starter_fip, opp_starter_k9=req.opp_starter_k9,
+        batter_hand=req.batter_hand, pitcher_hand=req.pitcher_hand,
+        batter_ba_vs_hand=req.batter_ba_vs_hand, batter_slg_vs_hand=req.batter_slg_vs_hand,
+        park_factor=req.park_factor, temp_f=req.temp_f,
+        wind_out=req.wind_out, wind_mph=req.wind_mph, last_7_avg=req.last_7_avg, bankroll=bankroll,
+    )
+
+
+@app.post("/props/nhl")
+def props_nhl(req: NHLPropsRequest):
+    """
+    NHL player prop analysis.
+    prop_type: shots, goals, assists, points, saves.
+    """
+    from agents.props_agent import analyze_nhl_prop
+    bankroll = req.bankroll or BANKROLL
+    return analyze_nhl_prop(
+        player_name=req.player_name, prop_type=req.prop_type,
+        line=req.line, american_odds_over=req.american_odds_over, american_odds_under=req.american_odds_under,
+        season_avg=req.season_avg, opp_shots_allowed_pg=req.opp_shots_allowed_pg,
+        opp_save_pct=req.opp_save_pct, toi_avg=req.toi_avg, pp_time=req.pp_time,
+        line_mates_quality=req.line_mates_quality, back_to_back=req.back_to_back,
+        last_5_avg=req.last_5_avg, bankroll=bankroll,
+    )
+
+
+@app.post("/simulate/ncaa")
+def simulate_ncaa(req: NCAAMatchupRequest):
+    """
+    NCAA tournament game simulation using KenPom + seed history model.
+    Returns win probabilities, upset likelihood, cinderella score, and recommended bet.
+    """
+    from agents.ncaa_agent import analyze_tournament_matchup
+    bankroll = req.bankroll or BANKROLL
+    dec_a = american_to_decimal(req.american_odds_a)
+    dec_b = american_to_decimal(req.american_odds_b)
+    return analyze_tournament_matchup(
+        team_a=req.team_a, team_b=req.team_b,
+        seed_a=req.seed_a, seed_b=req.seed_b,
+        adj_em_a=req.adj_em_a, adj_em_b=req.adj_em_b,
+        adj_off_a=req.adj_off_a, adj_def_a=req.adj_def_a,
+        adj_off_b=req.adj_off_b, adj_def_b=req.adj_def_b,
+        momentum_a=req.momentum_a, momentum_b=req.momentum_b,
+        conf_games_played_a=req.conf_games_played_a, conf_games_played_b=req.conf_games_played_b,
+        decimal_odds_a=dec_a, decimal_odds_b=dec_b,
+        round_name=req.round_name,
+        conference_a=req.conference_a, conference_b=req.conference_b,
+        bankroll=bankroll,
+    )
+
+
+@app.get("/picks/college")
+async def college_picks():
+    """
+    NCAA college basketball picks — March Madness / Finals.
+    Pulls live NCAAB odds and runs the KenPom-based tournament model.
+    """
+    from data.feeds.odds_api import get_odds
+    from agents.ncaa_agent import generate_bracket_picks
+
+    try:
+        games = await get_odds("ncaab", markets="h2h,spreads,totals")
+    except Exception as e:
+        games = []
+        print(f"[college_picks] NCAAB odds error: {e}")
+
+    if not games:
+        return {
+            "picks": _mock_college_picks(),
+            "source": "demo",
+            "note": "Live data requires valid ODDS_API_KEY",
+            "sport": "NCAAB",
+            "generated_at": datetime.now().isoformat(),
+        }
+
+    picks = generate_bracket_picks(games)
+    picks.sort(key=lambda x: x.get("edge_pct", 0), reverse=True)
+    return {
+        "picks": picks[:15],
+        "source": "live",
+        "sport": "NCAAB",
+        "games_analyzed": len(games),
+        "generated_at": datetime.now().isoformat(),
+    }
+
+
+def _mock_college_picks() -> list:
+    return [
+        {
+            "team_a": "UConn", "team_b": "San Diego State", "round": "National Championship",
+            "pick": "UConn", "direction": "moneyline", "american_odds": -165,
+            "our_prob": 62.0, "implied_prob": 62.3, "edge_pct": 2.4, "ev_pct": 1.5,
+            "confidence": "LEAN", "upset_alert": False, "cinderella_score": 0,
+            "narrative": "UConn's elite defense (adj_def 91.2) dominates SDSU's patient offense.",
+        },
+        {
+            "team_a": "Alabama", "team_b": "Iowa State", "round": "Final Four",
+            "pick": "Iowa State", "direction": "moneyline", "american_odds": +145,
+            "our_prob": 44.0, "implied_prob": 40.8, "edge_pct": 3.2, "ev_pct": 4.6,
+            "confidence": "VALUE", "upset_alert": True, "cinderella_score": 52,
+            "narrative": "5-seed Iowa State runs disciplined offense; undervalued vs Alabama's turnover-prone guards.",
+        },
+        {
+            "team_a": "Purdue", "team_b": "NC State", "round": "Elite Eight",
+            "pick": "NC State", "direction": "spread +7.5", "american_odds": -108,
+            "our_prob": 55.0, "implied_prob": 48.1, "edge_pct": 6.9, "ev_pct": 9.1,
+            "confidence": "STRONG_VALUE", "upset_alert": True, "cinderella_score": 78,
+            "narrative": "NC State on historic run; momentum + cinderella underdog EV is strongly positive.",
+        },
+    ]
+
+
+@app.get("/picks/props")
+async def props_picks():
+    """
+    Player prop picks across all four major sports (NBA/NFL/MLB/NHL).
+    Returns example props with full edge/EV/Kelly analysis.
+    Wire up to a live player-stats API for real-time personalization.
+    """
+    from agents.props_agent import (
+        analyze_nba_prop, analyze_nfl_prop, analyze_mlb_prop, analyze_nhl_prop, scan_props_for_value,
+    )
+    bankroll = BANKROLL
+
+    raw_props = [
+        # NBA
+        analyze_nba_prop("Jayson Tatum",       "points",        27.5, -115, -115, 27.1, opp_def_rtg=110.5, opp_pace=102.0, usage_rate=0.32, minutes_avg=36.0, bankroll=bankroll),
+        analyze_nba_prop("Nikola Jokic",        "rebounds",      12.5, -120, -110, 12.8, opp_def_rtg=114.0, opp_pace=98.0,  usage_rate=0.30, minutes_avg=34.5, bankroll=bankroll),
+        analyze_nba_prop("Stephen Curry",       "3pm",            4.5, -110, -120,  4.2, opp_def_rtg=112.0, opp_pace=101.0, usage_rate=0.28, minutes_avg=32.0, bankroll=bankroll),
+        analyze_nba_prop("LeBron James",        "pra",           43.5, -115, -115, 44.2, opp_def_rtg=109.0, opp_pace=100.0, usage_rate=0.30, minutes_avg=35.0, bankroll=bankroll),
+        analyze_nba_prop("Luka Doncic",         "assists",        8.5, -110, -120,  9.1, opp_def_rtg=111.0, opp_pace=99.0,  usage_rate=0.34, minutes_avg=36.0, bankroll=bankroll),
+        # NFL
+        analyze_nfl_prop("Patrick Mahomes",     "passing_yards", 285.5, -115, -115, 284.3, opp_pass_def_rank=22, pass_volume=37, game_total=47.5, implied_team_score=26.0, bankroll=bankroll),
+        analyze_nfl_prop("Christian McCaffrey", "rushing_yards",  82.5, -120, -110,  87.0, opp_rush_def_rank=20, implied_team_score=24.0, bankroll=bankroll),
+        analyze_nfl_prop("Davante Adams",       "receiving_yards", 72.5, -110, -120, 68.5, opp_pass_def_rank=12, pass_volume=34, bankroll=bankroll),
+        # MLB
+        analyze_mlb_prop("Juan Soto",           "total_bases",    1.5, -130, +110,  1.62, opp_starter_fip=4.35, park_factor=1.08, wind_out=True, wind_mph=12, bankroll=bankroll),
+        analyze_mlb_prop("Gerrit Cole",         "strikeouts",     7.5, -125, +105,  8.1,  opp_starter_k9=9.8, bankroll=bankroll),
+        analyze_mlb_prop("Freddie Freeman",     "hits",           1.5, -140, +115,  1.58, opp_starter_fip=3.90, bankroll=bankroll),
+        # NHL
+        analyze_nhl_prop("Auston Matthews",     "shots",          3.5, -115, -115,  4.1,  opp_shots_allowed_pg=32.0, toi_avg=21.0, pp_time=3.2, bankroll=bankroll),
+        analyze_nhl_prop("Connor McDavid",      "points",         1.5, +110, -140,  1.38, opp_save_pct=0.905, toi_avg=22.5, pp_time=3.5, bankroll=bankroll),
+        analyze_nhl_prop("David Pastrnak",      "goals",          0.5, -140, +115,  0.52, opp_save_pct=0.900, toi_avg=19.0, bankroll=bankroll),
+    ]
+
+    value_props = scan_props_for_value(raw_props, min_edge=0.03)
+    all_props_sorted = sorted(raw_props, key=lambda x: x["edge_pct"], reverse=True)
+
+    return {
+        "generated_at": datetime.now().isoformat(),
+        "total_props_analyzed": len(raw_props),
+        "value_props_found": len(value_props),
+        "top_value_props": value_props[:8],
+        "all_props": all_props_sorted,
+        "by_sport": {
+            "nba": [p for p in all_props_sorted if p["sport"] == "NBA"][:4],
+            "nfl": [p for p in all_props_sorted if p["sport"] == "NFL"][:3],
+            "mlb": [p for p in all_props_sorted if p["sport"] == "MLB"][:3],
+            "nhl": [p for p in all_props_sorted if p["sport"] == "NHL"][:3],
+        },
+    }
     """Demo steam alerts for when detector has no live data."""
     return [
         {"event": "Lakers @ Celtics",  "sport": "nba", "market": "Spread",    "from_odds": -108, "to_odds": -118, "delta": -10, "book": "DraftKings", "sharp": True,  "rlm": True,  "conviction": "HIGH",     "reason": "Line moved -10 in 3.2min | RLM: 68% public bets vs line move opposite", "age_mins": 8,  "detected_at": datetime.utcnow().isoformat()},
@@ -1072,6 +1412,184 @@ def _get_mock_steam_alerts() -> list:
         {"event": "Dodgers @ Giants",  "sport": "mlb", "market": "Total O/U", "from_odds": -110, "to_odds": -125, "delta": -15, "book": "Caesars",    "sharp": True,  "rlm": False, "conviction": "HIGH",     "reason": "Under steam | hit cold number 8.5",                                 "age_mins": 52, "detected_at": datetime.utcnow().isoformat()},
         {"event": "Flyers @ Penguins", "sport": "nhl", "market": "Puck Line", "from_odds": +110, "to_odds": +125, "delta": +15, "book": "PointsBet",  "sharp": False, "rlm": False, "conviction": "MEDIUM",   "reason": "Moderate line drift",                                               "age_mins": 87, "detected_at": datetime.utcnow().isoformat()},
     ]
+
+
+# ── Betfair Exchange endpoints ─────────────────────────────────────────────
+
+def _get_betfair_client() -> "BetfairClient":
+    from data.feeds.betfair import BetfairClient
+    client = BetfairClient()
+    if not client.is_configured():
+        from fastapi import HTTPException
+        raise HTTPException(
+            status_code=503,
+            detail="Betfair credentials not configured. Set BETFAIR_USERNAME, BETFAIR_PASSWORD, BETFAIR_APP_KEY in .env",
+        )
+    # Use existing session token if present; otherwise login
+    if not client.session_token:
+        client.login()
+    return client
+
+
+@app.get("/betfair/balance")
+async def betfair_balance():
+    """Betfair account available funds."""
+    client = _get_betfair_client()
+    return client.get_balance()
+
+
+@app.get("/betfair/bets")
+async def betfair_bets():
+    """Currently open / unmatched bets on Betfair."""
+    client = _get_betfair_client()
+    orders = client.list_current_orders()
+    return {
+        "open_bets":  len(orders),
+        "orders":     orders,
+    }
+
+
+@app.get("/betfair/pnl")
+async def betfair_pnl():
+    """Settled bet P&L summary from Betfair."""
+    from agents.betfair_executor import get_pnl_summary
+    client = _get_betfair_client()
+    return get_pnl_summary(client)
+
+
+@app.post("/betfair/place")
+async def betfair_place(req: BetfairPlaceRequest):
+    """
+    Place a single bet on Betfair Exchange.
+    dry_run=true (default) simulates the bet without spending money.
+    Set dry_run=false to place a real bet.
+    """
+    from agents.betfair_executor import execute_pick
+    client = _get_betfair_client()
+    bankroll = req.stake * 50 if req.stake else float(os.getenv("BANKROLL_TOTAL", "10000"))
+    pick = {
+        "sport":          req.sport,
+        "team":           req.team,
+        "opponent":       req.opponent,
+        "american_odds":  req.american_odds,
+        "edge_pct":       req.edge_pct,
+        "kelly_fraction": req.kelly_fraction,
+    }
+    result = execute_pick(client, pick, bankroll, dry_run=req.dry_run)
+    return result
+
+
+@app.post("/betfair/auto")
+async def betfair_auto(req: BetfairAutoRequest):
+    """
+    Auto-execute today's value picks on Betfair Exchange.
+    dry_run=true (default) shows what WOULD be bet without placing anything.
+    Set dry_run=false to place real bets for all picks meeting min_edge.
+    """
+    from agents.betfair_executor import auto_execute_picks
+    from agents.orchestrator import run_daily_picks
+
+    client   = _get_betfair_client()
+    bankroll = req.bankroll or float(os.getenv("BANKROLL_TOTAL", "10000"))
+
+    # Get today's picks from the orchestrator
+    try:
+        daily = run_daily_picks()
+        picks = daily.get("picks", [])
+    except Exception as exc:
+        logger.error("Orchestrator error in betfair_auto: %s", exc)
+        picks = []
+
+    return auto_execute_picks(
+        client   = client,
+        picks    = picks,
+        bankroll = bankroll,
+        min_edge = req.min_edge,
+        dry_run  = req.dry_run,
+    )
+
+
+# ── Kalshi Exchange endpoints (US-legal, CFTC-regulated) ─────────────────────
+
+@app.get("/kalshi/balance")
+async def kalshi_balance():
+    """Kalshi account available balance in USD."""
+    from data.feeds.kalshi import get_balance
+    balance = await get_balance()
+    return {"platform": "Kalshi", "available_usd": balance, "note": "CFTC-regulated, US legal all 50 states"}
+
+
+@app.get("/kalshi/markets")
+async def kalshi_markets_today():
+    """Today's open Kalshi sports markets with yes/no prices."""
+    from data.feeds.kalshi import get_sports_markets_today
+    markets = await get_sports_markets_today()
+    return {
+        "generated_at": datetime.now().isoformat(),
+        "open_markets":  len(markets),
+        "markets":       markets,
+    }
+
+
+@app.get("/kalshi/orders")
+async def kalshi_orders():
+    """Open Kalshi orders."""
+    from data.feeds.kalshi import get_orders
+    orders = await get_orders(status="resting")
+    return {"open_orders": len(orders), "orders": orders}
+
+
+@app.get("/kalshi/pnl")
+async def kalshi_pnl():
+    """Settled Kalshi P&L summary."""
+    from agents.kalshi_executor import get_pnl_summary
+    return await get_pnl_summary()
+
+
+@app.post("/kalshi/place")
+async def kalshi_place(req: KalshiPlaceRequest):
+    """
+    Place a single order on Kalshi.
+    dry_run=true (default) simulates without spending money.
+    Set dry_run=false to place a real order.
+    """
+    from agents.kalshi_executor import execute_pick
+    bankroll = float(os.getenv("BANKROLL_TOTAL", "10000"))
+    pick = {
+        "sport":          req.sport,
+        "team":           req.team,
+        "our_prob":       req.our_prob,
+        "edge_pct":       req.edge_pct,
+        "kelly_fraction": req.kelly_fraction,
+    }
+    return await execute_pick(pick, bankroll, dry_run=req.dry_run)
+
+
+@app.post("/kalshi/auto")
+async def kalshi_auto(req: KalshiAutoRequest):
+    """
+    Auto-execute all of today's value picks on Kalshi.
+    dry_run=true (default) shows what WOULD be ordered without placing anything.
+    Set dry_run=false to place real orders for all picks meeting min_edge.
+    """
+    from agents.kalshi_executor import auto_execute_picks
+    from agents.orchestrator import run_daily_picks
+
+    bankroll = req.bankroll or float(os.getenv("BANKROLL_TOTAL", "10000"))
+
+    try:
+        daily = run_daily_picks()
+        picks = daily.get("picks", [])
+    except Exception as exc:
+        logger.error("Orchestrator error in kalshi_auto: %s", exc)
+        picks = []
+
+    return await auto_execute_picks(
+        picks    = picks,
+        bankroll = bankroll,
+        min_edge = req.min_edge,
+        dry_run  = req.dry_run,
+    )
 
 
 # ── MCP Tool Manifest ──────────────────────────────────────────────────────
@@ -1096,12 +1614,20 @@ def mcp_tools():
             {"name": "simulate_mlb",           "endpoint": "/simulate/mlb",           "method": "POST", "category": "simulation",    "description": "MLB Monte Carlo (50k sims, sabermetrics)"},
             {"name": "simulate_nba",           "endpoint": "/simulate/nba",           "method": "POST", "category": "simulation",    "description": "NBA Monte Carlo (pace, ratings, B2B)"},
             {"name": "simulate_nfl",           "endpoint": "/simulate/nfl",           "method": "POST", "category": "simulation",    "description": "NFL Monte Carlo (DVOA, EPA, weather)"},
+            {"name": "simulate_ncaa",          "endpoint": "/simulate/ncaa",          "method": "POST", "category": "simulation",    "description": "NCAA tournament game sim (KenPom + seed history)"},
+            # ── Player Props ──
+            {"name": "props_nba",              "endpoint": "/props/nba",              "method": "POST", "category": "props",         "description": "NBA player prop: points/reb/ast/3pm/pra/blk/stl"},
+            {"name": "props_nfl",              "endpoint": "/props/nfl",              "method": "POST", "category": "props",         "description": "NFL player prop: pass/rush/rec yards, TDs"},
+            {"name": "props_mlb",              "endpoint": "/props/mlb",              "method": "POST", "category": "props",         "description": "MLB player prop: hits/TB/Ks/RBI/HR"},
+            {"name": "props_nhl",              "endpoint": "/props/nhl",              "method": "POST", "category": "props",         "description": "NHL player prop: shots/goals/assists/points"},
             # ── Bankroll ──
             {"name": "get_bankroll",           "endpoint": "/bankroll",               "method": "GET",  "category": "bankroll",      "description": "Live bankroll state + stats"},
             {"name": "bankroll_history",       "endpoint": "/bankroll/history",       "method": "GET",  "category": "bankroll",      "description": "Daily equity curve"},
             {"name": "place_bet",              "endpoint": "/bets",                   "method": "POST", "category": "bankroll",      "description": "Record a bet"},
             # ── Picks ──
-            {"name": "todays_picks",           "endpoint": "/picks/today",            "method": "GET",  "category": "picks",         "description": "AI + model generated picks"},
+            {"name": "todays_picks",           "endpoint": "/picks/today",            "method": "GET",  "category": "picks",         "description": "AI + model generated picks (all sports)"},
+            {"name": "college_picks",          "endpoint": "/picks/college",          "method": "GET",  "category": "picks",         "description": "NCAAB March Madness / Finals picks (KenPom model)"},
+            {"name": "props_picks",            "endpoint": "/picks/props",            "method": "GET",  "category": "picks",         "description": "Player prop picks — NBA, NFL, MLB, NHL"},
             {"name": "middles_finder",         "endpoint": "/picks/middles",          "method": "GET",  "category": "picks",         "description": "Middle window opportunities"},
             # ── Analytics ──
             {"name": "analytics_performance",  "endpoint": "/analytics/performance",  "method": "GET",  "category": "analytics",     "description": "CLV + ROI + edge-bucket attribution"},
@@ -1121,6 +1647,19 @@ def mcp_tools():
             # ── RAG ──
             {"name": "rag_search",             "endpoint": "/rag/search",             "method": "POST", "category": "rag",           "description": "Semantic search over knowledge base"},
             {"name": "rag_stats",              "endpoint": "/rag/stats",              "method": "GET",  "category": "rag",           "description": "Vector store collection stats"},
+            # ── Betfair Exchange ──
+            {"name": "betfair_balance",         "endpoint": "/betfair/balance",         "method": "GET",  "category": "betfair",       "description": "Betfair account balance"},
+            {"name": "betfair_bets",            "endpoint": "/betfair/bets",            "method": "GET",  "category": "betfair",       "description": "Current open bets on Betfair"},
+            {"name": "betfair_pnl",             "endpoint": "/betfair/pnl",             "method": "GET",  "category": "betfair",       "description": "Settled bet P&L and ROI"},
+            {"name": "betfair_place",           "endpoint": "/betfair/place",           "method": "POST", "category": "betfair",       "description": "Place a single bet on Betfair Exchange"},
+            {"name": "betfair_auto",            "endpoint": "/betfair/auto",            "method": "POST", "category": "betfair",       "description": "Auto-execute today's value picks on Betfair"},
+            # ── Kalshi Exchange (US-legal) ──
+            {"name": "kalshi_balance",          "endpoint": "/kalshi/balance",          "method": "GET",  "category": "kalshi",        "description": "Kalshi account balance (CFTC-regulated, all 50 US states)"},
+            {"name": "kalshi_markets",          "endpoint": "/kalshi/markets",          "method": "GET",  "category": "kalshi",        "description": "Today's open Kalshi sports markets with yes/no prices"},
+            {"name": "kalshi_orders",           "endpoint": "/kalshi/orders",           "method": "GET",  "category": "kalshi",        "description": "Open Kalshi orders"},
+            {"name": "kalshi_pnl",              "endpoint": "/kalshi/pnl",              "method": "GET",  "category": "kalshi",        "description": "Settled Kalshi P&L summary"},
+            {"name": "kalshi_place",            "endpoint": "/kalshi/place",            "method": "POST", "category": "kalshi",        "description": "Place a single prediction contract on Kalshi"},
+            {"name": "kalshi_auto",             "endpoint": "/kalshi/auto",             "method": "POST", "category": "kalshi",        "description": "Auto-execute today's value picks on Kalshi Exchange"},
         ]
     }
 

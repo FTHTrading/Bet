@@ -11,11 +11,30 @@
 
 @layer base {
   :root {
-    --green:       #00e87a;
-    --gold:        #f59e0b;
-    --glass-bg:    rgba(7, 14, 28, 0.62);
+    --green:        #00e87a;
+    --gold:         #f59e0b;
+    --glass-bg:     rgba(7, 14, 28, 0.62);
     --glass-border: rgba(255, 255, 255, 0.07);
-    --glass-shine: rgba(255, 255, 255, 0.07);
+    --glass-shine:  rgba(255, 255, 255, 0.07);
+
+    /* Premium surface stack */
+    --surface-base:       #020912;
+    --surface-panel:      rgba(6, 14, 28, 0.72);
+    --surface-raised:     rgba(8, 18, 34, 0.85);
+    --surface-bar:        rgba(4, 10, 22, 0.88);
+    --surface-ink-850:    rgb(10, 20, 36);
+    --surface-ink-925:    rgb(4, 9, 20);
+
+    /* Glow tokens */
+    --glow-green:  0 0 24px rgba(0, 232, 122, 0.20);
+    --glow-gold:   0 0 24px rgba(245, 158, 11, 0.20);
+    --glow-red:    0 0 24px rgba(255, 77, 109, 0.20);
+    --glow-blue:   0 0 24px rgba(59, 130, 246, 0.20);
+    --glow-cyan:   0 0 24px rgba(6, 182, 212, 0.18);
+
+    /* Blur */
+    --blur-glass: blur(28px) saturate(170%);
+    --blur-bar:   blur(24px) saturate(180%);
   }
   html { font-size: 15px; }
   body {
@@ -276,6 +295,60 @@
   .glow-green  { box-shadow: 0 0 28px rgba(0, 232, 122, 0.22); }
   .glow-gold   { box-shadow: 0 0 28px rgba(245, 158, 11, 0.22); }
   .glow-red    { box-shadow: 0 0 28px rgba(255, 77, 109, 0.22); }
+
+  /* ═══════════════════════════════════════════════
+     GLASS PANEL — base container for new layout
+  ═══════════════════════════════════════════════ */
+
+  .glass-panel {
+    @apply relative rounded-card overflow-hidden;
+    background: var(--surface-panel);
+    backdrop-filter: var(--blur-glass);
+    -webkit-backdrop-filter: var(--blur-glass);
+    border: 1px solid var(--glass-border);
+    box-shadow:
+      inset 0 1px 0 var(--glass-shine),
+      inset 0 -1px 0 rgba(0, 0, 0, 0.10),
+      0 4px 24px rgba(0, 0, 0, 0.55),
+      0 1px 3px rgba(0, 0, 0, 0.25);
+    transition: box-shadow 0.28s ease, border-color 0.28s ease, transform 0.28s ease;
+  }
+  .glass-panel::before {
+    content: '';
+    @apply absolute inset-x-0 top-0 h-px pointer-events-none;
+    background: linear-gradient(90deg,
+      transparent 0%,
+      rgba(255, 255, 255, 0.10) 40%,
+      rgba(255, 255, 255, 0.10) 60%,
+      transparent 100%
+    );
+  }
+
+  /* ═══════════════════════════════════════════════
+     COMMAND BAR
+  ═══════════════════════════════════════════════ */
+
+  .command-bar {
+    @apply flex items-center justify-between px-5 py-3 gap-4;
+    background: var(--surface-bar);
+    backdrop-filter: var(--blur-bar);
+    -webkit-backdrop-filter: var(--blur-bar);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    box-shadow:
+      0 1px 0 rgba(255, 255, 255, 0.04),
+      0 2px 16px rgba(0, 0, 0, 0.6);
+  }
+
+  /* ═══════════════════════════════════════════════
+     ICON BUTTON
+  ═══════════════════════════════════════════════ */
+
+  .icon-btn {
+    @apply w-8 h-8 grid place-items-center rounded-lg border
+           text-ink-500 hover:text-ink-200
+           bg-ink-850 border-ink-700 hover:border-ink-600
+           transition-all duration-150 cursor-pointer;
+  }
 }
 
 /* ═══════════════════════════════════════════════

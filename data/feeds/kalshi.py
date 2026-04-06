@@ -167,6 +167,110 @@ async def get_balance() -> float:
         return 0.0
 
 
+async def place_order(
+    ticker:    str,
+    side:      str,     # "yes" or "no"
+    count:     int,     # number of contracts ($0.01 each at 100 cent payout)
+    yes_price: int,     # price in cents (1-99)
+    action:    str = "buy",
+    order_type: str = "limit",
+) -> dict:
+    """
+    Place a limit order on Kalshi.
+
+    Each contract pays $1 if correct, costs yes_price cents.
+    side="yes"  → backing the event to happen
+    side="no"   → backing the event NOT to happen (pays 100-yes_price cents)
+
+    Kalshi API: POST /portfolio/orders
+    """
+    if not KALSHI_API_KEY:
+        return {"error": "KALSHI_API_KEY not configured"}
+
+    body: dict = {
+        "ticker":     ticker,
+        "action":     action,
+        "side":       side,
+        "type":       order_type,
+        "count":      count,
+        "yes_price":  yes_price,
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(
+                f"{KALSHI_BASE_URL}/portfolio/orders",
+                headers=_get_headers(),
+                json=body,
+            )
+            resp.raise_for_status()
+            return resp.json()
+    except httpx.HTTPStatusError as exc:
+        return {"error": f"HTTP {exc.response.status_code}: {exc.response.text}"}
+    except Exception as exc:
+        return {"error": str(exc)}
+
+
+async def cancel_order(order_id: str) -> dict:
+    """Cancel an open Kalshi order by ID."""
+    if not KALSHI_API_KEY:
+        return {"error": "KALSHI_API_KEY not configured"}
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.delete(
+                f"{KALSHI_BASE_URL}/portfolio/orders/{order_id}",
+                headers=_get_headers(),
+            )
+            resp.raise_for_status()
+            return resp.json()
+    except Exception as exc:
+        return {"error": str(exc)}
+
+
+async def get_orders(status: str = "resting") -> list[dict]:
+    """
+    List Kalshi orders.
+    status: "resting" (open), "canceled", "executed", "all"
+    """
+    if not KALSHI_API_KEY:
+        return []
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(
+                f"{KALSHI_BASE_URL}/portfolio/orders",
+                headers=_get_headers(),
+                params={"status": status, "limit": 100},
+            )
+            resp.raise_for_status()
+            return resp.json().get("orders", [])
+    except Exception as exc:
+        print(f"[Kalshi] Error fetching orders: {exc}")
+        return []
+
+
+async def get_settlements() -> list[dict]:
+    """
+    Get settled/filled order history for P&L tracking.
+    """
+    if not KALSHI_API_KEY:
+        return []
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(
+                f"{KALSHI_BASE_URL}/portfolio/settlements",
+                headers=_get_headers(),
+                params={"limit": 200},
+            )
+            resp.raise_for_status()
+            return resp.json().get("settlements", [])
+    except Exception as exc:
+        print(f"[Kalshi] Error fetching settlements: {exc}")
+        return []
+
+
 # ─── Cross-Market Arbitrage (Kalshi vs Sportsbook) ───────────────────────────
 
 def _kalshi_to_american_odds(yes_price_cents: float) -> int:
