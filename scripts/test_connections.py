@@ -55,8 +55,8 @@ async def run_checks() -> int:
     import platform
     version = platform.python_version()
     major, minor, *_ = [int(x) for x in version.split(".")]
-    ok = major >= 3 and minor >= 11
-    if not check(f"Python {version}", ok, "(need 3.11+)", warn=not ok):
+    ok = major >= 3 and minor >= 10
+    if not check(f"Python {version}", ok, "(need 3.10+)", warn=not ok):
         failures += 1
     print()
 
@@ -91,18 +91,32 @@ async def run_checks() -> int:
 
     # ── Environment variables ────────────────────────────────────────────────
     print("[ Environment / API Keys ]")
-    odds_key   = os.getenv("ODDS_API_KEY", "")
-    kalshi_key = os.getenv("KALSHI_API_KEY", "")
-    openai_key = os.getenv("OPENAI_API_KEY", "")
-    bankroll   = os.getenv("BANKROLL_TOTAL", "")
+    odds_key    = os.getenv("ODDS_API_KEY", "")
+    kalshi_key  = os.getenv("KALSHI_API_KEY", "")
+    kalshi_pem  = os.getenv("KALSHI_PRIVATE_KEY_PATH", "")
+    openai_key  = os.getenv("OPENAI_API_KEY", "")
+    bankroll    = os.getenv("BANKROLL_TOTAL", "")
 
     odds_configured = bool(odds_key) and odds_key != "YOUR_ODDS_API_KEY_HERE"
     check("ODDS_API_KEY", odds_configured,
-          "(live odds active)" if odds_configured else "(using mock slate — add key for live data)",
+          "(live odds active)" if odds_configured else "(using mock slate -- add key for live data)",
           warn=not odds_configured)
-    check("KALSHI_API_KEY", bool(kalshi_key),
-          "(live orders enabled)" if kalshi_key else "(dry-run only — add key to bet real money)",
+    kalshi_ready = bool(kalshi_key) and bool(kalshi_pem)
+    check("KALSHI_API_KEY",         bool(kalshi_key),
+          kalshi_key if kalshi_key else "(not set)",
           warn=not kalshi_key)
+    check("KALSHI_PRIVATE_KEY_PATH", bool(kalshi_pem),
+          f"({kalshi_pem})" if kalshi_pem else "(not set -- RSA signing disabled)",
+          warn=not kalshi_pem)
+    if kalshi_pem and not os.path.isabs(kalshi_pem):
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        abs_pem = os.path.join(root, kalshi_pem)
+    else:
+        abs_pem = kalshi_pem
+    pem_exists = bool(kalshi_pem) and os.path.isfile(abs_pem)
+    check("  PEM file exists", pem_exists,
+          f"({abs_pem})" if pem_exists else f"not found at {abs_pem}",
+          warn=not pem_exists)
     check("OPENAI_API_KEY", bool(openai_key),
           "(AI tips enabled)" if openai_key else "(optional — AI tips disabled)",
           warn=not openai_key)
@@ -138,28 +152,45 @@ async def run_checks() -> int:
 
     # ── Kalshi API connectivity ───────────────────────────────────────────────
     print("[ Kalshi ]")
-    if kalshi_key:
-        import httpx
+    if kalshi_ready and pem_exists:
+        import httpx, base64, time
         try:
+            from cryptography.hazmat.primitives.serialization import load_pem_private_key
+            from cryptography.hazmat.primitives import hashes
+            from cryptography.hazmat.primitives.asymmetric import padding as asym_pad
+            with open(abs_pem, "rb") as f:
+                priv = load_pem_private_key(f.read(), password=None)
+            ts   = str(int(time.time() * 1000))
+            path = "/trade-api/v2/portfolio/balance"
+            msg  = f"{ts}GET{path}".encode()
+            sig  = priv.sign(msg,
+                asym_pad.PSS(mgf=asym_pad.MGF1(hashes.SHA256()),
+                             salt_length=asym_pad.PSS.DIGEST_LENGTH),
+                hashes.SHA256())
+            req_headers = {
+                "KALSHI-ACCESS-KEY":       kalshi_key,
+                "KALSHI-ACCESS-TIMESTAMP": ts,
+                "KALSHI-ACCESS-SIGNATURE": base64.b64encode(sig).decode(),
+            }
             async with httpx.AsyncClient(timeout=8.0) as client:
                 resp = await client.get(
-                    "https://trading-api.kalshi.com/trade-api/v2/portfolio/balance",
-                    headers={"Authorization": f"Bearer {kalshi_key}"},
+                    "https://api.elections.kalshi.com" + path,
+                    headers=req_headers,
                 )
-                if resp.status_code == 200:
-                    balance = resp.json().get("balance", 0) / 100
-                    check("Auth + balance", True, f"(${balance:,.2f} available)")
-                elif resp.status_code == 401:
-                    check("Auth", False, "(401 — invalid KALSHI_API_KEY)")
-                    failures += 1
-                else:
-                    check("API reachable", False, f"(HTTP {resp.status_code})")
-                    failures += 1
+            if resp.status_code == 200:
+                balance = resp.json().get("balance", 0) / 100
+                check("RSA auth + balance", True, f"(${balance:,.2f} available)")
+            elif resp.status_code == 401:
+                check("RSA auth", False, "(401 -- key ID or signature mismatch)")
+                failures += 1
+            else:
+                check("API reachable", False, f"(HTTP {resp.status_code})")
+                failures += 1
         except Exception as exc:
-            check("API reachable", False, f"(network error: {exc})")
+            check("Kalshi RSA auth", False, f"(error: {exc})")
             failures += 1
     else:
-        check("Auth", True, "(skipped — no key; all orders will be dry-run only)", warn=True)
+        check("Auth", True, "(skipped -- configure KALSHI_API_KEY + KALSHI_PRIVATE_KEY_PATH)", warn=True)
     print()
 
     # ── Local API server ──────────────────────────────────────────────────────

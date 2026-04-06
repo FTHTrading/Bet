@@ -19,6 +19,11 @@ env/
 .env
 !.env.example
 
+# ── Private keys (NEVER commit) ────────────────────────────────
+keys/
+*.pem
+*.key
+
 # ── Database / data files ────────────────────────────────
 db/*.db
 db/logs/*.json

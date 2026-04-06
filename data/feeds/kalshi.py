@@ -15,19 +15,24 @@ API Reference: https://trading-api.kalshi.com/trade-api/v2
 Auth: RSA key-based (API key + private key) or simple key auth depending on tier
 """
 from __future__ import annotations
+import base64
 import os
 import json
 import asyncio
+import time
 from typing import Optional
 from datetime import datetime
+from urllib.parse import urlparse
 import httpx
 
 
 # ─── Config ───────────────────────────────────────────────────────────────────
 
-KALSHI_BASE_URL = os.getenv("KALSHI_BASE_URL", "https://trading-api.kalshi.com/trade-api/v2")
+KALSHI_BASE_URL = os.getenv("KALSHI_BASE_URL", "https://api.elections.kalshi.com/trade-api/v2")
+# Key ID (UUID) from https://kalshi.com/account/api
 KALSHI_API_KEY = os.getenv("KALSHI_API_KEY", "")
-KALSHI_API_SECRET = os.getenv("KALSHI_API_SECRET", "")
+# Path to RSA PEM private key file (relative to project root or absolute)
+KALSHI_PRIVATE_KEY_PATH = os.getenv("KALSHI_PRIVATE_KEY_PATH", "")
 
 # Sports ticker prefixes on Kalshi
 SPORTS_PREFIXES = [
@@ -35,19 +40,73 @@ SPORTS_PREFIXES = [
 ]
 
 
+# ─── RSA Key Loader ───────────────────────────────────────────────────────────
+
+def _load_private_key():
+    """Load the RSA private key from KALSHI_PRIVATE_KEY_PATH. Returns None if not set."""
+    key_path = KALSHI_PRIVATE_KEY_PATH
+    if not key_path:
+        return None
+    if not os.path.isabs(key_path):
+        # Resolve relative to project root (this file is data/feeds/kalshi.py)
+        project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        key_path = os.path.join(project_root, key_path)
+    try:
+        from cryptography.hazmat.primitives.serialization import load_pem_private_key
+        with open(key_path, "rb") as f:
+            return load_pem_private_key(f.read(), password=None)
+    except Exception as exc:
+        print(f"[Kalshi] Could not load private key from '{key_path}': {exc}")
+        return None
+
+
 # ─── HTTP Client ──────────────────────────────────────────────────────────────
 
-def _get_headers() -> dict:
+def _get_headers(method: str = "GET", url: str = "") -> dict:
     """
-    Kalshi uses simple API key authentication for demo/basic tier.
-    For production RSA-signed requests, extend this.
+    Build Kalshi authentication headers.
+
+    Kalshi uses RSA-PSS SHA-256 signed requests:
+      KALSHI-ACCESS-KEY       — your API key UUID
+      KALSHI-ACCESS-TIMESTAMP — epoch milliseconds as string
+      KALSHI-ACCESS-SIGNATURE — base64(RSA-PSS-SHA256(timestamp + METHOD + path))
+
+    Falls back to simple Bearer token if no private key is configured (read-only only).
     """
     headers = {
         "Content-Type": "application/json",
         "Accept": "application/json",
     }
-    if KALSHI_API_KEY:
+    if not KALSHI_API_KEY:
+        return headers
+
+    ts   = str(int(time.time() * 1000))
+    path = urlparse(url).path if url.startswith("http") else url
+
+    headers["KALSHI-ACCESS-KEY"]       = KALSHI_API_KEY
+    headers["KALSHI-ACCESS-TIMESTAMP"] = ts
+
+    private_key = _load_private_key()
+    if private_key:
+        try:
+            from cryptography.hazmat.primitives import hashes
+            from cryptography.hazmat.primitives.asymmetric import padding as asym_pad
+            msg = f"{ts}{method.upper()}{path}".encode()
+            sig = private_key.sign(
+                msg,
+                asym_pad.PSS(
+                    mgf=asym_pad.MGF1(hashes.SHA256()),
+                    salt_length=asym_pad.PSS.DIGEST_LENGTH,
+                ),
+                hashes.SHA256(),
+            )
+            headers["KALSHI-ACCESS-SIGNATURE"] = base64.b64encode(sig).decode()
+        except Exception as exc:
+            print(f"[Kalshi] RSA signing error: {exc}")
+    else:
+        # No private key — Bearer fallback (unauthenticated public reads only)
         headers["Authorization"] = f"Bearer {KALSHI_API_KEY}"
+
     return headers
 
 
@@ -76,7 +135,7 @@ async def get_active_markets(
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.get(
                 f"{KALSHI_BASE_URL}/markets",
-                headers=_get_headers(),
+                headers=_get_headers("GET", f"{KALSHI_BASE_URL}/markets"),
                 params=params,
             )
             resp.raise_for_status()
@@ -96,7 +155,7 @@ async def get_market(ticker: str) -> Optional[dict]:
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.get(
                 f"{KALSHI_BASE_URL}/markets/{ticker}",
-                headers=_get_headers(),
+                headers=_get_headers("GET", f"{KALSHI_BASE_URL}/markets/{ticker}"),
             )
             resp.raise_for_status()
             return resp.json().get("market")
@@ -117,7 +176,7 @@ async def get_market_orderbook(ticker: str) -> Optional[dict]:
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.get(
                 f"{KALSHI_BASE_URL}/markets/{ticker}/orderbook",
-                headers=_get_headers(),
+                headers=_get_headers("GET", f"{KALSHI_BASE_URL}/markets/{ticker}/orderbook"),
             )
             resp.raise_for_status()
             book = resp.json().get("orderbook", {})
@@ -138,7 +197,7 @@ async def get_portfolio() -> dict:
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.get(
                 f"{KALSHI_BASE_URL}/portfolio/positions",
-                headers=_get_headers(),
+                headers=_get_headers("GET", f"{KALSHI_BASE_URL}/portfolio/positions"),
             )
             resp.raise_for_status()
             return resp.json()
@@ -156,7 +215,7 @@ async def get_balance() -> float:
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.get(
                 f"{KALSHI_BASE_URL}/portfolio/balance",
-                headers=_get_headers(),
+                headers=_get_headers("GET", f"{KALSHI_BASE_URL}/portfolio/balance"),
             )
             resp.raise_for_status()
             data = resp.json()
@@ -200,7 +259,7 @@ async def place_order(
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.post(
                 f"{KALSHI_BASE_URL}/portfolio/orders",
-                headers=_get_headers(),
+                headers=_get_headers("POST", f"{KALSHI_BASE_URL}/portfolio/orders"),
                 json=body,
             )
             resp.raise_for_status()
@@ -220,7 +279,7 @@ async def cancel_order(order_id: str) -> dict:
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.delete(
                 f"{KALSHI_BASE_URL}/portfolio/orders/{order_id}",
-                headers=_get_headers(),
+                headers=_get_headers("DELETE", f"{KALSHI_BASE_URL}/portfolio/orders/{order_id}"),
             )
             resp.raise_for_status()
             return resp.json()
@@ -240,7 +299,7 @@ async def get_orders(status: str = "resting") -> list[dict]:
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.get(
                 f"{KALSHI_BASE_URL}/portfolio/orders",
-                headers=_get_headers(),
+                headers=_get_headers("GET", f"{KALSHI_BASE_URL}/portfolio/orders"),
                 params={"status": status, "limit": 100},
             )
             resp.raise_for_status()
@@ -261,7 +320,7 @@ async def get_settlements() -> list[dict]:
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.get(
                 f"{KALSHI_BASE_URL}/portfolio/settlements",
-                headers=_get_headers(),
+                headers=_get_headers("GET", f"{KALSHI_BASE_URL}/portfolio/settlements"),
                 params={"limit": 200},
             )
             resp.raise_for_status()
